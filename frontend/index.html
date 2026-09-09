@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Code Reviewer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%237c3aed'/><text x='16' y='22' text-anchor='middle' fill='white' font-family='monospace' font-size='16' font-weight='700'>⌥</text></svg>" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg0: #0d1117;
+  --bg1: #161b22;
+  --bg2: #1c2128;
+  --bg3: #22272e;
+  --border: #30363d;
+  --txt: #e6edf3;
+  --muted: #8b949e;
+  --accent: #7c3aed;
+  --accent-lt: #a78bfa;
+  --red: #f85149;
+  --yellow: #e3b341;
+  --blue: #58a6ff;
+  --green: #3fb950;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg0);
+  color: var(--txt);
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+/* ── Header ── */
+header {
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 2rem;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.logo {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--accent-lt);
+}
+.logo span { color: var(--muted); }
+
+.tab-bar { display: flex; gap: 0; margin-left: auto; }
+.tab {
+  padding: 0 1.25rem;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  font-size: 0.82rem;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+  user-select: none;
+}
+.tab:hover { color: var(--txt); }
+.tab.active { color: var(--txt); border-bottom-color: var(--accent); }
+
+/* ── Layout ── */
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr 1px 420px;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
+.divider {
+  background: var(--border);
+  cursor: col-resize;
+}
+
+/* ── Editor pane ── */
+.editor-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.lang-select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--txt);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  outline: none;
+  cursor: pointer;
+}
+.lang-select:focus { border-color: var(--accent); }
+
+.context-input {
+  flex: 1;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--txt);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  outline: none;
+  min-width: 0;
+}
+.context-input::placeholder { color: var(--muted); }
+.context-input:focus { border-color: var(--accent); }
+
+.btn-review {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 1.1rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: background .15s, transform .1s;
+  white-space: nowrap;
+}
+.btn-review:hover:not(:disabled) { background: #6d28d9; transform: translateY(-1px); }
+.btn-review:disabled { opacity: .5; cursor: default; }
+
+/* Monaco container */
+#monaco-container {
+  flex: 1;
+  min-height: 0;
+}
+
+/* PR URL tab */
+.pr-pane {
+  display: none;
+  flex-direction: column;
+  padding: 2rem;
+  gap: 1rem;
+}
+.pr-pane.active { display: flex; }
+
+.field-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+.pr-input {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--txt);
+  border-radius: 8px;
+  padding: 0.65rem 0.9rem;
+  font-size: 0.875rem;
+  outline: none;
+  font-family: 'JetBrains Mono', monospace;
+}
+.pr-input:focus { border-color: var(--accent); }
+.pr-input::placeholder { color: var(--muted); }
+
+.btn-full {
+  width: 100%;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.65rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s;
+}
+.btn-full:hover:not(:disabled) { background: #6d28d9; }
+.btn-full:disabled { opacity: .5; cursor: default; }
+
+/* ── Results pane ── */
+.results-pane {
+  background: var(--bg1);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.results-header {
+  padding: 1rem 1.25rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg1);
+  z-index: 2;
+}
+.results-title {
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.results-body { padding: 1rem 1.25rem; flex: 1; }
+
+/* Empty / loading states */
+.state-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 2rem;
+}
+.state-empty .icon { font-size: 2.5rem; opacity: .4; }
+.state-empty p { font-size: 0.85rem; line-height: 1.6; }
+
+.spinner {
+  width: 24px; height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Score card */
+.score-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.score-ring {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.score-ring.green  { border-color: var(--green);  color: var(--green); }
+.score-ring.yellow { border-color: var(--yellow); color: var(--yellow); }
+.score-ring.red    { border-color: var(--red);    color: var(--red); }
+
+.score-info .verdict {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--txt);
+  margin-bottom: 0.25rem;
+  text-transform: capitalize;
+}
+.score-info .lang {
+  font-size: 0.72rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--muted);
+}
+
+.summary-text {
+  font-size: 0.83rem;
+  color: var(--muted);
+  line-height: 1.65;
+  margin-bottom: 1.25rem;
+}
+
+/* Issue groups */
+.severity-group { margin-bottom: 1rem; }
+.severity-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+.severity-label.critical { background: rgba(248,81,73,.15);  color: var(--red); }
+.severity-label.warning  { background: rgba(227,179,65,.12); color: var(--yellow); }
+.severity-label.suggestion { background: rgba(88,166,255,.12); color: var(--blue); }
+
+.issue-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.82rem;
+}
+.issue-card.critical   { border-left-color: var(--red); }
+.issue-card.warning    { border-left-color: var(--yellow); }
+.issue-card.suggestion { border-left-color: var(--blue); }
+
+.issue-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.issue-category {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--muted);
+  background: var(--bg3);
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.issue-lines {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+.issue-desc { color: var(--txt); line-height: 1.55; margin-bottom: 0.4rem; }
+.issue-fix {
+  color: var(--muted);
+  line-height: 1.55;
+  font-style: italic;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+}
+.issue-fix strong { color: var(--accent-lt); font-style: normal; }
+
+/* No issues */
+.all-good {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--green);
+  font-size: 0.85rem;
+}
+
+/* PR file header */
+.file-header {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--accent-lt);
+  margin: 1.25rem 0 0.6rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.file-header:first-child { margin-top: 0; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">AI <span>//</span> Code Reviewer</div>
+  <div class="tab-bar">
+    <div class="tab active" data-tab="snippet">Code snippet</div>
+    <div class="tab" data-tab="pr">GitHub PR</div>
+  </div>
+</header>
+
+<div class="workspace">
+
+  <!-- ── Editor pane ── -->
+  <div class="editor-pane" id="pane-snippet">
+    <div class="editor-toolbar">
+      <select class="lang-select" id="lang-select">
+        <option value="auto">Auto-detect</option>
+        <option value="python">Python</option>
+        <option value="javascript">JavaScript</option>
+        <option value="typescript">TypeScript</option>
+        <option value="csharp">C#</option>
+        <option value="java">Java</option>
+        <option value="swift">Swift</option>
+        <option value="kotlin">Kotlin</option>
+        <option value="go">Go</option>
+        <option value="rust">Rust</option>
+        <option value="sql">SQL</option>
+        <option value="html">HTML</option>
+        <option value="css">CSS</option>
+      </select>
+      <input class="context-input" id="context-input" placeholder="Optional: describe what this code does…" />
+      <button class="btn-review" id="btn-review" onclick="runSnippetReview()">
+        <span>▶</span> Review
+      </button>
+    </div>
+    <div id="monaco-container"></div>
+  </div>
+
+  <!-- ── PR pane ── -->
+  <div class="pr-pane" id="pane-pr">
+    <div>
+      <div class="field-label">GitHub PR URL</div>
+      <input class="pr-input" id="pr-url-input" placeholder="https://github.com/owner/repo/pull/42" />
+    </div>
+    <div>
+      <div class="field-label">Context (optional)</div>
+      <input class="pr-input" id="pr-context-input" placeholder="What does this PR do?" />
+    </div>
+    <button class="btn-full" id="btn-pr-review" onclick="runPRReview()">Review PR</button>
+    <p style="font-size:.78rem;color:var(--muted);line-height:1.6">
+      Works with public repos without a token. For private repos or higher rate limits, add a
+      <code style="color:var(--accent-lt)">GITHUB_TOKEN</code> to your <code style="color:var(--accent-lt)">.env</code>.
+    </p>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ── Results pane ── -->
+  <div class="results-pane">
+    <div class="results-header">
+      <div class="results-title">Review results</div>
+    </div>
+    <div class="results-body" id="results-body">
+      <div class="state-empty">
+        <div class="icon">⌥</div>
+        <p>Paste your code and hit <strong style="color:var(--txt)">Review</strong> to get a structured analysis with severity ratings.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Monaco Editor from CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script>
+/* ── Monaco setup ─────────────────────────────────────────────── */
+let editor;
+
+require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
+
+require(['vs/editor/editor.main'], function () {
+  editor = monaco.editor.create(document.getElementById('monaco-container'), {
+    value: `def calculate_discount(price, discount_percent, user):
+    # Apply discount for premium users
+    if user["premium"] == True:
+        discount = price * discount_percent / 100
+        final_price = price - discount
+    else:
+        final_price = price
+
+    query = f"SELECT * FROM orders WHERE user_id = {user['id']}"
+
+    print("Applying discount for user: " + user["name"])
+    return final_price
+
+# Apply a 20% discount
+result = calculate_discount(100, 20, {"premium": True, "id": "42", "name": "Alice"})
+print(result)`,
+    language: 'python',
+    theme: 'vs-dark',
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono', monospace",
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    lineNumbers: 'on',
+    renderLineHighlight: 'line',
+    padding: { top: 16, bottom: 16 },
+    automaticLayout: true,
+  });
+
+  // Sync language selector → Monaco model language
+  document.getElementById('lang-select').addEventListener('change', e => {
+    if (e.target.value !== 'auto') {
+      monaco.editor.setModelLanguage(editor.getModel(), e.target.value);
+    }
+  });
+});
+
+/* ── Tabs ────────────────────────────────────────────────────── */
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    document.getElementById('pane-snippet').style.display = target === 'snippet' ? 'flex' : 'none';
+    document.getElementById('pane-pr').classList.toggle('active', target === 'pr');
+    // Trigger Monaco relayout after tab switch
+    if (target === 'snippet' && editor) setTimeout(() => editor.layout(), 50);
+  });
+});
+
+/* ── Review helpers ──────────────────────────────────────────── */
+const API = '';  // same origin
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = loading;
+  btn.textContent = loading ? '⏳ Reviewing…' : btnId === 'btn-review' ? '▶ Review' : 'Review PR';
+}
+
+function showLoading() {
+  document.getElementById('results-body').innerHTML = `
+    <div class="state-empty">
+      <div class="spinner"></div>
+      <p>Analysing with Claude…</p>
+    </div>`;
+}
+
+function scoreClass(n) {
+  if (n >= 7) return 'green';
+  if (n >= 4) return 'yellow';
+  return 'red';
+}
+
+function renderReview(review) {
+  const cls = scoreClass(review.score);
+  const bySeverity = { critical: [], warning: [], suggestion: [] };
+  (review.issues || []).forEach(i => (bySeverity[i.severity] || []).push(i));
+
+  let html = `
+    <div class="score-card">
+      <div class="score-ring ${cls}">${review.score}</div>
+      <div class="score-info">
+        <div class="verdict">${review.verdict}</div>
+        <div class="lang">${review.language}</div>
+      </div>
+    </div>
+    <div class="summary-text">${review.summary}</div>`;
+
+  const severities = ['critical', 'warning', 'suggestion'];
+  let hasIssues = false;
+  severities.forEach(sev => {
+    const issues = bySeverity[sev];
+    if (!issues.length) return;
+    hasIssues = true;
+    const dot = sev === 'critical' ? '🔴' : sev === 'warning' ? '🟡' : '🔵';
+    html += `<div class="severity-group">
+      <div class="severity-label ${sev}">${dot} ${sev} (${issues.length})</div>`;
+    issues.forEach(issue => {
+      html += `<div class="issue-card ${sev}">
+        <div class="issue-top">
+          <span class="issue-category">${issue.category}</span>
+          <span class="issue-lines">line ${issue.lines}</span>
+        </div>
+        <div class="issue-desc">${escHtml(issue.description)}</div>
+        <div class="issue-fix"><strong>Fix:</strong> ${escHtml(issue.suggestion)}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  if (!hasIssues) {
+    html += `<div class="all-good">✅ No issues found — looks clean!</div>`;
+  }
+
+  return html;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ── Snippet review ──────────────────────────────────────────── */
+async function runSnippetReview() {
+  const code = editor ? editor.getValue() : '';
+  if (!code.trim()) return;
+
+  setLoading('btn-review', true);
+  showLoading();
+
+  try {
+    const res = await fetch(`${API}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        language: document.getElementById('lang-select').value,
+        context:  document.getElementById('context-input').value,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || 'Unknown error');
+    }
+
+    const review = await res.json();
+    document.getElementById('results-body').innerHTML = renderReview(review);
+  } catch (e) {
+    document.getElementById('results-body').innerHTML = `
+      <div class="state-empty">
+        <div class="icon">⚠️</div>
+        <p style="color:var(--red)">${escHtml(e.message)}</p>
+      </div>`;
+  } finally {
+    setLoading('btn-review', false);
+    const btn = document.getElementById('btn-review');
+    btn.innerHTML = '<span>▶</span> Review';
+  }
+}
+
+/* ── PR review ───────────────────────────────────────────────── */
+async function runPRReview() {
+  const url = document.getElementById('pr-url-input').value.trim();
+  if (!url) return;
+
+  setLoading('btn-pr-review', true);
+  showLoading();
+
+  try {
+    const res = await fetch(`${API}/review-pr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pr_url:  url,
+        context: document.getElementById('pr-context-input').value,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || 'Unknown error');
+    }
+
+    const prReview = await res.json();
+    let html = `<p style="font-size:.8rem;color:var(--muted);margin-bottom:1rem">${escHtml(prReview.pr_title)}</p>`;
+    prReview.files.forEach(f => {
+      html += `<div class="file-header">📄 ${escHtml(f.filename)}</div>`;
+      html += renderReview(f.review);
+    });
+    document.getElementById('results-body').innerHTML = html;
+  } catch (e) {
+    document.getElementById('results-body').innerHTML = `
+      <div class="state-empty">
+        <div class="icon">⚠️</div>
+        <p style="color:var(--red)">${escHtml(e.message)}</p>
+      </div>`;
+  } finally {
+    setLoading('btn-pr-review', false);
+    document.getElementById('btn-pr-review').textContent = 'Review PR';
+  }
+}
+
+// Keyboard shortcut: Cmd/Ctrl+Enter to review
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    const activeTab = document.querySelector('.tab.active').dataset.tab;
+    if (activeTab === 'snippet') runSnippetReview();
+    else runPRReview();
+  }
+});
+</script>
+</body>
+</html>
