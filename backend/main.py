@@ -8,7 +8,6 @@ Endpoints:
 """
 
 from __future__ import annotations
-import asyncio
 import logging
 import os
 from pathlib import Path
@@ -47,14 +46,12 @@ def health():
 
 
 @app.post("/review", response_model=CodeReview)
-async def review(req: ReviewRequest):
+def review(req: ReviewRequest):
     """Review a code snippet."""
     if not req.code.strip():
         raise HTTPException(400, "Code cannot be empty.")
     try:
-        return await asyncio.to_thread(
-            review_code, req.code, req.language, _sanitize_context(req.context)
-        )
+        return review_code(req.code, req.language, _sanitize_context(req.context))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except TimeoutError:
@@ -65,10 +62,10 @@ async def review(req: ReviewRequest):
 
 
 @app.post("/review-pr", response_model=PRReview)
-async def review_pr(req: PRReviewRequest):
-    """Fetch a GitHub PR diff and review each changed file concurrently."""
+def review_pr(req: PRReviewRequest):
+    """Fetch a GitHub PR diff and review each changed file."""
     try:
-        title, files = await asyncio.to_thread(fetch_pr_files, req.pr_url)
+        title, files = fetch_pr_files(req.pr_url)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -92,30 +89,33 @@ async def review_pr(req: PRReviewRequest):
     language     = req.language or "auto"
     safe_context = _sanitize_context(req.context)
 
-    async def review_file(f: dict) -> FileReview:
+    file_reviews: list[FileReview] = []
+    for f in files:
         try:
-            cr = await asyncio.to_thread(
-                review_code,
+            cr = review_code(
                 f["patch"],
                 language,
                 f"This is a git diff for file: {f['filename']}. {safe_context}",
             )
+            file_reviews.append(FileReview(filename=f["filename"], review=cr))
         except Exception as e:
             logger.error("Failed to review %s: %s", f["filename"], e, exc_info=True)
-            # Return a graceful error review rather than silently dropping the file
-            cr = CodeReview(
-                language=language,
-                summary=f"Review failed for this file: {type(e).__name__}",
-                score=0,
-                verdict="needs work",
-                issues=[],
-            )
-        return FileReview(filename=f["filename"], review=cr)
+            # Return a graceful error entry rather than silently dropping the file
+            file_reviews.append(FileReview(
+                filename=f["filename"],
+                review=CodeReview(
+                    language=language,
+                    summary=f"Review failed: {type(e).__name__}",
+                    score=0,
+                    verdict="needs work",
+                    issues=[],
+                ),
+            ))
 
-    # Review all files concurrently
-    file_reviews: list[FileReview] = await asyncio.gather(*[review_file(f) for f in files])
+    if not file_reviews:
+        raise HTTPException(500, "All files failed to review — check server logs.")
 
-    return PRReview(pr_title=title, pr_url=req.pr_url, files=list(file_reviews))
+    return PRReview(pr_title=title, pr_url=req.pr_url, files=file_reviews)
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────
