@@ -3,10 +3,15 @@ reviewer.py — Claude-powered code review engine.
 
 Uses Claude's tool_use feature to guarantee structured JSON output
 matching the CodeReview schema, with no string parsing needed.
+
+Configuration (via environment variables or .env):
+  ANTHROPIC_API_KEY   — required; your Anthropic API key
+  REVIEW_MODEL        — Claude model to use (default: claude-haiku-4-5-20251001)
+  REVIEW_MAX_TOKENS   — max tokens for the review response (default: 2048)
+  MAX_CODE_CHARS      — maximum code snippet length in characters (default: 50000)
 """
 
 from __future__ import annotations
-import json
 import os
 
 import anthropic
@@ -18,7 +23,11 @@ load_dotenv()
 
 _client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-MODEL = "claude-haiku-4-5-20251001"   # fast + cheap; swap to claude-sonnet-4-6 for deeper reviews
+# Model is configurable so you can switch from the cheap/fast Haiku to the
+# more thorough Sonnet without touching code — just set REVIEW_MODEL in .env.
+MODEL          = os.getenv("REVIEW_MODEL", "claude-haiku-4-5-20251001")
+MAX_TOKENS     = int(os.getenv("REVIEW_MAX_TOKENS", "2048"))
+MAX_CODE_CHARS = int(os.getenv("MAX_CODE_CHARS", "50000"))
 
 # ── Tool schema — Claude must call this to return a review ────────────────────
 
@@ -81,7 +90,19 @@ def _numbered(code: str) -> str:
 
 
 def review_code(code: str, language: str = "auto", context: str = "") -> CodeReview:
-    """Review a code snippet and return a structured CodeReview."""
+    """
+    Review a code snippet and return a structured CodeReview.
+
+    Raises:
+        ValueError: if the code exceeds MAX_CODE_CHARS or the model returns
+                    an unexpected response without a tool_use block.
+        anthropic.APIError: on network or API-level failures.
+    """
+    if len(code) > MAX_CODE_CHARS:
+        raise ValueError(
+            f"Code is {len(code):,} characters — limit is {MAX_CODE_CHARS:,}. "
+            "Trim the snippet or raise MAX_CODE_CHARS in .env."
+        )
 
     lang_hint = f"Language: {language}\n" if language != "auto" else "Detect the language automatically.\n"
     ctx_hint  = f"Context: {context}\n" if context else ""
@@ -94,16 +115,23 @@ Code to review:
 """
     response = _client.messages.create(
         model=MODEL,
-        max_tokens=2048,
+        max_tokens=MAX_TOKENS,
         system=_SYSTEM,
         tools=[_REVIEW_TOOL],
         tool_choice={"type": "tool", "name": "submit_review"},
         messages=[{"role": "user", "content": user_msg}],
     )
 
-    # Extract tool call input
-    tool_use = next(b for b in response.content if b.type == "tool_use")
-    data = tool_use.input
+    # The tool_choice forces Claude to call submit_review, so a missing
+    # tool_use block would be a model regression — surface it clearly.
+    tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+    if not tool_use_blocks:
+        raise ValueError(
+            f"Model returned no tool_use block (stop_reason={response.stop_reason!r}). "
+            "This is unexpected — the request uses tool_choice=tool, which forces a call."
+        )
+
+    data = tool_use_blocks[0].input
 
     issues = [Issue(**i) for i in data.get("issues", [])]
     return CodeReview(
