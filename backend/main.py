@@ -4,7 +4,7 @@ main.py — FastAPI application for the AI Code Reviewer.
 Endpoints:
   POST /review        — review a code snippet
   POST /review-pr     — review a GitHub pull request
-  GET  /health        — health check
+  GET  /health        — health check (includes model and config info)
 """
 
 from __future__ import annotations
@@ -13,12 +13,13 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
 from schemas import ReviewRequest, PRReviewRequest, CodeReview, PRReview, FileReview
-from reviewer import review_code
+from reviewer import review_code, MODEL, MAX_CODE_CHARS
 from github_pr import fetch_pr_files
 
 load_dotenv()
@@ -31,6 +32,16 @@ MAX_CONTEXT_LEN = int(os.getenv("MAX_CONTEXT_LEN", "500"))
 
 app = FastAPI(title="AI Code Reviewer", version="1.0.0")
 
+# ── CORS — allow the frontend to call the API from any localhost port ─────────
+# In production you'd lock this down to your own domain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5500", "http://127.0.0.1:5500", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
 
 def _sanitize_context(ctx: str) -> str:
     """Strip control characters and cap length to limit prompt injection surface."""
@@ -42,14 +53,30 @@ def _sanitize_context(ctx: str) -> str:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Returns service status and the active model/config so you can confirm
+    what's running without having to check logs or environment variables."""
+    return {
+        "status": "ok",
+        "model": MODEL,
+        "max_code_chars": MAX_CODE_CHARS,
+        "max_pr_files": MAX_PR_FILES,
+        "github_token_set": bool(os.getenv("GITHUB_TOKEN")),
+    }
 
 
 @app.post("/review", response_model=CodeReview)
 def review(req: ReviewRequest):
-    """Review a code snippet."""
+    """Review a code snippet. Returns a structured CodeReview."""
     if not req.code.strip():
         raise HTTPException(400, "Code cannot be empty.")
+
+    if len(req.code) > MAX_CODE_CHARS:
+        raise HTTPException(
+            400,
+            f"Code is {len(req.code):,} characters — limit is {MAX_CODE_CHARS:,}. "
+            "Trim the snippet or raise MAX_CODE_CHARS in .env."
+        )
+
     try:
         return review_code(req.code, req.language, _sanitize_context(req.context))
     except ValueError as e:
