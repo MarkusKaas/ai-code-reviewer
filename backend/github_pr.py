@@ -1,5 +1,12 @@
 """
 github_pr.py — Fetch pull request diffs from the GitHub API.
+
+Configuration (via environment variables or .env):
+  GITHUB_TOKEN       — optional; unauthenticated requests hit rate limits
+                       faster (60 req/hr vs 5000 req/hr with a token)
+  MAX_PATCH_CHARS    — maximum characters per file patch before truncation
+                       (default: 20000). Prevents a single large file from
+                       blowing up the review prompt.
 """
 
 from __future__ import annotations
@@ -16,6 +23,11 @@ _HEADERS = {
     "Accept": "application/vnd.github.v3+json",
     **({"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {}),
 }
+
+# Per-file patch is truncated to this many characters before being sent
+# to the reviewer. A diff of 20 000 chars is already ~5 000 tokens, which
+# is well within the model's context but enough to cover most changed files.
+MAX_PATCH_CHARS = int(os.getenv("MAX_PATCH_CHARS", "20000"))
 
 # File extensions to review (skip binary/generated files)
 _REVIEWABLE = {
@@ -67,6 +79,15 @@ def fetch_pr_files(pr_url: str) -> tuple[str, list[dict]]:
         # Skip removed files and non-reviewable extensions
         if status == "removed" or not patch or _ext(filename) not in _REVIEWABLE:
             continue
+
+        # Truncate very large patches to avoid token blowout. The truncation
+        # notice is appended so the reviewer knows it's seeing a partial diff.
+        if len(patch) > MAX_PATCH_CHARS:
+            patch = (
+                patch[:MAX_PATCH_CHARS]
+                + f"\n\n[... patch truncated at {MAX_PATCH_CHARS:,} chars — "
+                f"{len(patch) - MAX_PATCH_CHARS:,} chars omitted ...]"
+            )
 
         results.append({"filename": filename, "patch": patch})
 
